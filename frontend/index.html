@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blue Giants</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="logo">Blue Giants</div>
+        <nav>
+            <ul>
+                <li><a href="#">Database</a></li>
+                <li><a href="#">Who We Are</a></li>
+                <li><a href="#">Ally With Us</a></li>
+                <li><a href="#" class="donate">Donate</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <img src="whale.jpg" alt="Whale Image" class="hero-image">
+        <div class="hero-text">
+            <h1>Blue Giants</h1>
+            <p>The biggest whale database in the world</p>
+        </div>
+    </section>
+
+    <!-- Add Whale Section -->
+    <section id="add-whale-section">
+        <h2>Add a Whale</h2>
+        <form id="add-whale-form" class="form-style">
+            <label for="name">Whale Name:</label>
+            <input type="text" id="name" placeholder="Enter whale name" required>
+            <br>
+            <label for="description">Description:</label>
+            <textarea id="description" placeholder="Enter description" required></textarea>
+            <br>
+            <button type="submit">Add Whale</button>
+        </form>
+    </section>
+
+    <!-- Whale List Section -->
+    <section id="whale-list-section">
+        <h2>Whale List</h2>
+        <button id="fetch-whales">Fetch Whales</button>
+        <table border="1" class="whale-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody id="whale-list"></tbody>
+        </table>
+    </section>
+
+    <script>
+        const form = document.getElementById('add-whale-form');
+        const whaleList = document.getElementById('whale-list');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const name = document.getElementById('name').value;
+            const description = document.getElementById('description').value;
+
+            const response = await fetch('http://localhost:8080/add-whale', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description }),
+            });
+
+            if (response.ok) {
+                alert('Whale added successfully!');
+                form.reset();
+            } else {
+                alert('Failed to add whale.');
+            }
+        });
+
+        document.getElementById('fetch-whales').addEventListener('click', async () => {
+            const response = await fetch('http://localhost:8080/get-whales');
+            const whales = await response.json();
+
+            whaleList.innerHTML = whales.map(whale =>
+                `<tr>
+                    <td>${whale.name}</td>
+                    <td>${whale.description}</td>
+                </tr>`
+            ).join('');
+        });
+    </script>
+</body>
+</html>
+
