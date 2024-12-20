@@ -23,7 +23,8 @@ The project aims to raise awareness about whales, their characteristics, and the
 - Amir Zhunussov, Zhandarbek Zhetpissov, Ernar Aubakir
 
 ## Screenshot
-![preview of our glorious site](blue giants preview.png)
+![Blue Giants Preview](blue%20giants%20preview.png)
+
 
 
 ## Getting Started
