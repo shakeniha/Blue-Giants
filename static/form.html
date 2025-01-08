@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Profile</title>
+</head>
+<body>
+    <h1>User Profile</h1>
+    <nav>
+        <a href="registration.html">Register</a>
+        <a href="login.html">Login</a>
+        <a href="profile.html">Profile</a>
+    </nav>
+
+    <!-- Personal Information Section -->
+    <section id="personal-info">
+        <h2>Personal Information</h2>
+        <form id="update-info-form">
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" required>
+            <br>
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+            <br>
+            <button type="submit">Update</button>
+        </form>
+    </section>
+
+    <!-- Order History Section -->
+    <section id="orders">
+        <h2>Order History</h2>
+        <table border="1">
+            <thead>
+                <tr>
+                    <th>Order ID</th>
+                    <th>Date</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody id="order-list">
+                <!-- Dynamic content will be inserted here -->
+            </tbody>
+        </table>
+    </section>
+
+    <!-- Interaction History Section -->
+    <section id="interactions">
+        <h2>Interaction History</h2>
+        <ul id="interaction-list">
+            <!-- Dynamic content will be inserted here -->
+        </ul>
+    </section>
+
+    <!-- Support Messages Section -->
+    <section id="support">
+        <h2>Support</h2>
+        <form id="support-form" enctype="multipart/form-data">
+            <label for="subject">Subject:</label>
+            <input type="text" id="subject" name="subject" required>
+            <br>
+            <label for="message">Message:</label>
+            <textarea id="message" name="message" required></textarea>
+            <br>
+            <label for="attachments">Attachments:</label>
+            <input type="file" id="attachments" name="attachments" multiple>
+            <br>
+            <button type="submit">Send</button>
+        </form>
+    </section>
+
+    <script>
+        // Fetch and populate order history
+        async function fetchOrders() {
+            try {
+                const response = await fetch('/api/orders');
+                if (!response.ok) throw new Error('Failed to fetch orders');
+                const orders = await response.json();
+                const orderList = document.getElementById('order-list');
+                orderList.innerHTML = ''; // Clear existing content
+                orders.forEach(order => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${order.id}</td>
+                        <td>${order.date}</td>
+                        <td>${order.total}</td>
+                    `;
+                    orderList.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Error fetching orders:', error);
+            }
+        }
+
+        // Fetch and populate interaction history
+        async function fetchInteractions() {
+            try {
+                const response = await fetch('/api/interactions');
+                if (!response.ok) throw new Error('Failed to fetch interactions');
+                const interactions = await response.json();
+                const interactionList = document.getElementById('interaction-list');
+                interactionList.innerHTML = ''; // Clear existing content
+                interactions.forEach(interaction => {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = `${interaction.type}: ${interaction.details}`;
+                    interactionList.appendChild(listItem);
+                });
+            } catch (error) {
+                console.error('Error fetching interactions:', error);
+            }
+        }
+
+        // Update personal information
+        document.getElementById('update-info-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+
+            try {
+                const response = await fetch('/api/users/update', {
+                    method: 'POST',
+                    body: formData,
+                });
+                if (!response.ok) throw new Error('Failed to update user information');
+                const result = await response.json();
+                alert(result.message);
+            } catch (error) {
+                console.error('Error updating user info:', error);
+                alert('Error updating information');
+            }
+        });
+
+        // Send support message
+        document.getElementById('support-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+
+            try {
+                const response = await fetch('/api/support/send', {
+                    method: 'POST',
+                    body: formData,
+                });
+                if (!response.ok) throw new Error('Failed to send support message');
+                const result = await response.json();
+                alert(result.message);
+            } catch (error) {
+                console.error('Error sending support message:', error);
+                alert('Error sending message');
+            }
+        });
+
+        // Initialize the page
+        fetchOrders();
+        fetchInteractions();
+    </script>
+</body>
+</html>
