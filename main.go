@@ -609,7 +609,7 @@ func paginateWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var err error
-	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mongo:HLUsyfdQfxzgOHevYxodIwJvoeoVfhNU@junction.proxy.rlwy.net:28564"))
 	if err != nil {
 		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
