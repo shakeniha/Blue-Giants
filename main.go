@@ -218,7 +218,7 @@ func sendConfirmationEmail(email, token string) {
 	password := "cxnfodqgjvbwufsn"
 	to := []string{email}
 	subject := "Confirm your registration"
-	body := fmt.Sprintf("Click the link to confirm your registration: http://localhost:8080/api/confirm?token=%s", token)
+	body := fmt.Sprintf("Click the link to confirm your registration: https://blue-giants-production.up.railway.app/api/confirm?token=%s", token)
 
 	msg := fmt.Sprintf("From: %s\nTo: %s\nSubject: %s\n\n%s", from, strings.Join(to, ","), subject, body)
 	auth := smtp.PlainAuth("", from, password, "smtp.gmail.com")
@@ -635,6 +635,6 @@ func main() {
 
 	http.HandleFunc("/api/whales/filter", filterWhalesHandler)
 
-	log.Println("Server started at http://localhost:8080")
+	log.Println("Server started at blue-giants-production.up.railway.app")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
