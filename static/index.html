@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Whale Tracker</title>
     <script>
+        async function checkLogin() {
+            const res = await fetch('/api/check-login', { credentials: 'include' });
+            const status = res.status;
+
+            if (status === 200) {
+                const data = await res.json();
+                document.getElementById("auth-status").innerHTML = `Logged in as: ${data.username} | <a href="/logout.html">Logout</a>`;
+            } else {
+                document.getElementById("auth-status").innerHTML = `<a href="/login.html">Login</a> | <a href="/register.html">Register</a>`;
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", checkLogin);
+
         const apiBase = "/api/whales";
 
         async function fetchWhales(sortBy = "", order = "") {
@@ -151,10 +165,16 @@ function prevPage() {
     }
 }
 
-
     </script>
 </head>
 <body>
+    <div id="auth-status">Checking login status...</div>
+    <nav>
+        <a href="/">Home</a> |
+        <a href="/protected.html">Protected Page</a> |
+        <a href="/admin.html">Admin Page</a>
+        <a href="/logout.html">Logout</a>
+    </nav>
     <h1>Whale Tracker</h1>
     <a href="form.html">profile</a>
     <div>

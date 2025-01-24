@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected Page</title>
+    <script>
+        async function loadProtectedPage() {
+            const res = await fetch('/api/protected', { headers: { "X-CSRF-Token": getCSRFToken() } });
+            const status = res.status;
+
+            if (status === 200) {
+                const text = await res.text();
+                document.getElementById("protected-content").innerText = text;
+            } else {
+                document.getElementById("protected-content").innerText = "Access denied. Please log in.";
+            }
+        }
+
+        function getCSRFToken() {
+            return document.cookie.split('; ').find(row => row.startsWith('csrf_token='))?.split('=')[1];
+        }
+
+        document.addEventListener("DOMContentLoaded", loadProtectedPage);
+    </script>
+</head>
+<body>
+    <h1>Protected Page</h1>
+    <div id="protected-content">Loading...</div>
+    <br>
+    <a href="/">Back to Home</a>
+</body>
+</html>

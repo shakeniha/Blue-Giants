@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register</title>
+    <script>
+        async function register(event) {
+            event.preventDefault();
+            const username = document.getElementById("username").value;
+            const password = document.getElementById("password").value;
+
+            const res = await fetch('/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ username, password })
+            });
+
+            if (res.ok) {
+                alert("Registration successful! Please check your email to confirm your account.");
+                window.location.href = '/login.html';
+            } else {
+                const error = await res.text();
+                alert(`Error: ${error}`);
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1>Register</h1>
+    <form action="/api/register" method="POST">
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="username" required>
+        <span id="emailError" style="color:red; display:none;">Invalid email address</span>
+      
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" minlength="8" required>
+        <button type="submit">Register</button>
+      </form>      
+</body>
+</html>

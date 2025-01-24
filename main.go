@@ -1,49 +1,34 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/smtp"
 	"os"
-	"os/signal"
+	"regexp"
 	"strconv"
-	"syscall"
+	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/sirupsen/logrus" // <-- Structured logging
+	"github.com/golang-jwt/jwt/v4"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"golang.org/x/crypto/bcrypt"
-	"golang.org/x/time/rate" // <-- Rate limiting
 )
 
-// ----------------------------------------------------------
-// 1. Global variables
-// ----------------------------------------------------------
-
-// MongoDB client
 var client *mongo.Client
+var usersCollection *mongo.Collection
+var ctx = context.Background()
 
-// Create a global structured logger using logrus
-var logger = logrus.New()
-
-// Rate limiter: 2 requests per second with a burst of 5
-var limiter = rate.NewLimiter(2, 5)
-
-// Secret key for signing tokens (choose your own securely)
-var jwtKey = []byte("your_secret_key")
-
-// ----------------------------------------------------------
-// 2. Models
-// ----------------------------------------------------------
+const jwtSecret = "06df829c80fa7a07d6b4e219a0ea683dacb6cf6f652db490417893179adf5525"
 
 // Whale represents the whale model
 type Whale struct {
@@ -55,309 +40,236 @@ type Whale struct {
 	PopulationCount int                `json:"populationCount"`
 }
 
-// User represents a user in the system
 type User struct {
-	ID           primitive.ObjectID `json:"id,omitempty" bson:"_id,omitempty"`
-	Email        string             `json:"email"`
-	Password     string             `json:"password"`
-	Orders       []string           `json:"orders"`
-	Interactions []string           `json:"interactions"`
+	Username          string `bson:"username"`
+	HashedPassword    string `bson:"hashedPassword"`
+	Role              string `bson:"role"`
+	Confirmed         bool   `bson:"confirmed"`
+	ConfirmationToken string `bson:"confirmationToken"`
 }
 
-// SupportMessage represents a support message sent by a user
 type SupportMessage struct {
-	UserID    primitive.ObjectID `json:"userId"`
-	Subject   string             `json:"subject"`
-	Message   string             `json:"message"`
-	FilePaths []string           `json:"filePaths"`
+	Subject    string `json:"subject"`
+	Message    string `json:"message"`
+	Email      string `json:"email"`
+	Attachment string
 }
 
-// Claims structure for JWT
-type Claims struct {
-	Email string `json:"email"`
-	jwt.RegisteredClaims
-}
-
-// ----------------------------------------------------------
-// 3. Connecting to MongoDB
-// ----------------------------------------------------------
-
-func connectToMongoDB() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var err error
-	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to connect to MongoDB")
-	}
-
-	// Test the connection
-	err = client.Ping(ctx, nil)
-	if err != nil {
-		logger.WithError(err).Fatal("Could not ping MongoDB")
-	}
-
-	logger.WithFields(logrus.Fields{
-		"action": "start",
-		"status": "success",
-	}).Info("Connected to MongoDB!")
-}
-
-// ----------------------------------------------------------
-// 4. Logging user actions
-// ----------------------------------------------------------
-
-// LogAction writes a structured log for user actions, e.g., page visits, filters, etc.
-func LogAction(action, detail, userID string) {
-	logger.WithFields(logrus.Fields{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"userID":    userID,
-		"action":    action,
-		"detail":    detail,
-	}).Info("User action logged")
-}
-
-// wrapperHandler is a middleware that applies rate-limiting and logs requests.
-func wrapperHandler(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// --- Rate limiting check ---
-		if !limiter.Allow() {
-			logger.Warn("Rate limit exceeded")
-			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-
-		// Log the incoming request path
-		LogAction("Incoming Request", r.URL.Path, "UnknownUser")
-
-		h.ServeHTTP(w, r)
-	}
-}
-
-// ----------------------------------------------------------
-// 5. Handlers (Users)
-// ----------------------------------------------------------
-
-// createUserHandler creates a new user and saves them to the database
-func createUserHandler(w http.ResponseWriter, r *http.Request) {
+func register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if len(username) < 8 || len(password) < 8 {
+		http.Error(w, "Username and password must be at least 8 characters", http.StatusNotAcceptable)
+		return
+	}
+
+	if !isValidEmail(username) {
+		http.Error(w, "Invalid email address", http.StatusBadRequest)
+		return
+	}
+
+	var existingUser User
+	err := usersCollection.FindOne(ctx, bson.M{"username": username}).Decode(&existingUser)
+	if err == nil {
+		http.Error(w, "User already exists", http.StatusConflict)
+		return
+	}
+
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		http.Error(w, "Error hashing password", http.StatusInternalServerError)
+		return
+	}
+
+	confirmationToken := generateToken()
+
+	newUser := User{
+		Username:          username,
+		HashedPassword:    hashedPassword,
+		Role:              "user",
+		Confirmed:         false,
+		ConfirmationToken: confirmationToken,
+	}
+	_, err = usersCollection.InsertOne(ctx, newUser)
+	if err != nil {
+		http.Error(w, "Error registering user", http.StatusInternalServerError)
+		return
+	}
+
+	go sendConfirmationEmail(username, confirmationToken)
+	fmt.Fprintln(w, "Registration successful! Please check your email to confirm your account.")
+}
+
+func isValidEmail(email string) bool {
+	regex := `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
+	re := regexp.MustCompile(regex)
+	return re.MatchString(email)
+}
+
+func confirmEmail(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Invalid token", http.StatusBadRequest)
 		return
 	}
 
 	var user User
-	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-		logger.WithError(err).Error("Invalid JSON data for user creation")
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	err := usersCollection.FindOneAndUpdate(
+		ctx,
+		bson.M{"confirmationToken": token},
+		bson.M{"$set": bson.M{"confirmed": true, "confirmationToken": ""}},
+	).Decode(&user)
 
-	// Check for required fields
-	if user.Email == "" || user.Password == "" {
-		http.Error(w, "Email and password are required", http.StatusBadRequest)
-		return
-	}
-
-	// Hash the password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
-		logger.WithError(err).Error("Failed to hash password")
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
-		return
-	}
-	user.Password = string(hashedPassword)
-
-	// Insert user into MongoDB
-	collection := client.Database("example_db").Collection("users")
-	_, err = collection.InsertOne(context.TODO(), user)
-	if err != nil {
-		logger.WithError(err).Error("Failed to create user in the database")
-		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		log.Printf("Confirmation failed: token '%s' not found or expired.", token)
+		http.Error(w, "Invalid or expired token", http.StatusBadRequest)
 		return
 	}
 
-	LogAction("User Created", fmt.Sprintf("Email: %s", user.Email), "System")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"message": "User created successfully"})
+	log.Printf("Email confirmed for username '%s'.", user.Username)
+	fmt.Fprintln(w, "Email confirmed successfully! You can now log in.")
 }
 
-func updateUserHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Only PUT method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		http.Error(w, "User ID is required", http.StatusBadRequest)
-		return
-	}
-
-	var updates User
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		logger.WithError(err).Error("Invalid JSON data for user update")
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
-
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		http.Error(w, "Invalid User ID", http.StatusBadRequest)
-		return
-	}
-
-	collection := client.Database("example_db").Collection("users")
-	_, err = collection.UpdateOne(context.TODO(), bson.M{"_id": objID}, bson.M{"$set": updates})
-	if err != nil {
-		logger.WithError(err).Error("Failed to update user in the database")
-		http.Error(w, "Failed to update user", http.StatusInternalServerError)
-		return
-	}
-
-	LogAction("User Updated", fmt.Sprintf("UserID: %s", id), id)
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "User updated successfully"})
-}
-
-func getUserDataHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		http.Error(w, "User ID is required", http.StatusBadRequest)
-		return
-	}
-
-	objID, err := primitive.ObjectIDFromHex(id)
-	if err != nil {
-		http.Error(w, "Invalid User ID", http.StatusBadRequest)
-		return
-	}
-
-	collection := client.Database("example_db").Collection("users")
-	var user User
-	if err := collection.FindOne(context.TODO(), bson.M{"_id": objID}).Decode(&user); err != nil {
-		logger.WithError(err).Warn("User not found in the database")
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Get User Data", fmt.Sprintf("UserID: %s", id), id)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
-}
-
-// ----------------------------------------------------------
-// 6. Handlers (Authentication)
-// ----------------------------------------------------------
-
-func loginHandler(w http.ResponseWriter, r *http.Request) {
+func login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var credentials User
-	if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil {
-		logger.WithError(err).Error("Invalid JSON data for login")
-		http.Error(w, "Invalid input", http.StatusBadRequest)
-		return
-	}
+	username := r.FormValue("username")
+	password := r.FormValue("password")
 
-	// Retrieve the user from the database
-	collection := client.Database("example_db").Collection("users")
 	var user User
-	err := collection.FindOne(context.TODO(), bson.M{"email": credentials.Email}).Decode(&user)
+	err := usersCollection.FindOne(ctx, bson.M{"username": username}).Decode(&user)
 	if err != nil {
-		logger.WithError(err).Warn("Invalid email or password (user not found)")
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		log.Printf("Login failed: user not found for username '%s'.", username)
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		return
 	}
 
-	// Compare the provided password with the stored hashed password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(credentials.Password)); err != nil {
-		logger.WithError(err).Warn("Invalid email or password (wrong password)")
-		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+	if !user.Confirmed {
+		log.Printf("Login failed: email not confirmed for username '%s'.", username)
+		http.Error(w, "Email not confirmed. Please check your email.", http.StatusUnauthorized)
 		return
 	}
 
-	// Create a JWT token
-	expirationTime := time.Now().Add(24 * time.Hour)
-	claims := &Claims{
-		Email: user.Email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime),
-		},
+	if !checkPassword(password, user.HashedPassword) {
+		log.Printf("Login failed: incorrect password for username '%s'.", username)
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		return
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString(jwtKey)
+	token, err := generateJWT(user.Username, user.Role)
 	if err != nil {
-		logger.WithError(err).Error("Failed to generate JWT token")
-		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		log.Printf("Error generating token for username '%s': %v", username, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	LogAction("User Login", fmt.Sprintf("Email: %s", user.Email), user.ID.Hex())
-	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
-}
-
-func profileHandler(w http.ResponseWriter, r *http.Request) {
-	tokenStr := r.Header.Get("Authorization")
-	if tokenStr == "" {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	tokenStr = tokenStr[len("Bearer "):] // Remove "Bearer " prefix
-
-	claims := &Claims{}
-	token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
-		return jwtKey, nil
+	http.SetCookie(w, &http.Cookie{
+		Name:    "Authorization",
+		Value:   token,
+		Expires: time.Now().Add(24 * time.Hour),
 	})
 
-	if err != nil || !token.Valid {
-		logger.WithError(err).Warn("Invalid or expired token in profileHandler")
+	log.Printf("Login successful for username '%s'.", username)
+	fmt.Fprintln(w, "Login successful!")
+}
+
+func logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:    "Authorization",
+		Value:   "",
+		Expires: time.Now().Add(-1 * time.Hour),
+	})
+	fmt.Fprintln(w, "Logout successful!")
+}
+
+func protected(w http.ResponseWriter, r *http.Request) {
+	tokenCookie, err := r.Cookie("Authorization")
+	if err != nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	LogAction("Profile Access", "User viewed profile", claims.Email)
-	json.NewEncoder(w).Encode(map[string]string{"email": claims.Email})
+	username, role, err := validateJWT(tokenCookie.Value)
+	if err != nil {
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	fmt.Fprintf(w, "Welcome, %s! Your role is: %s.", username, role)
 }
 
-// ----------------------------------------------------------
-// 7. Handlers (Support)
-// ----------------------------------------------------------
+func generateToken() string {
+	token := make([]byte, 32)
+	_, _ = rand.Read(token)
+	return hex.EncodeToString(token)
+}
 
-// (A) The simpler HTML-based email sender from the first code
-//
-//	If you want to keep this separate or unify with sendEmail, that’s up to you.
+func sendConfirmationEmail(email, token string) {
+	from := "fergumz.70@gmail.com"
+	password := "cxnfodqgjvbwufsn"
+	to := []string{email}
+	subject := "Confirm your registration"
+	body := fmt.Sprintf("Click the link to confirm your registration: http://localhost:8080/api/confirm?token=%s", token)
+
+	msg := fmt.Sprintf("From: %s\nTo: %s\nSubject: %s\n\n%s", from, strings.Join(to, ","), subject, body)
+	auth := smtp.PlainAuth("", from, password, "smtp.gmail.com")
+
+	err := smtp.SendMail("smtp.gmail.com:587", auth, from, to, []byte(msg))
+	if err != nil {
+		log.Printf("Error sending email: %v", err)
+	}
+}
+
+func generateJWT(username, role string) (string, error) {
+	claims := jwt.MapClaims{
+		"username": username,
+		"role":     role,
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(jwtSecret))
+}
+
+func validateJWT(tokenString string) (string, string, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(jwtSecret), nil
+	})
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		return claims["username"].(string), claims["role"].(string), nil
+	}
+	return "", "", err
+}
+
 func sendMailSimpleHTML(subject, message string, to []string) error {
 	headers := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";"
 	msg := "Subject: " + subject + "\n" + headers + "\n\n" + message
 
 	auth := smtp.PlainAuth(
 		"",
-		"your_gmail_address@gmail.com",
-		"your_app_password", // e.g. 'cxnfodqgjvbwufsn'
+		"fergumz.70@gmail.com",
+		"cxnfodqgjvbwufsn",
 		"smtp.gmail.com",
 	)
 
 	return smtp.SendMail(
 		"smtp.gmail.com:587",
 		auth,
-		"your_gmail_address@gmail.com",
+		"fergumz.70@gmail.com",
 		to,
 		[]byte(msg),
 	)
 }
 
-// (B) The uploadHandler from the first code, for sending a form + optional image
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		// Parse form data
@@ -387,8 +299,8 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			message += fmt.Sprintf("<br><img src='/static/%s' alt='Uploaded Image'>", header.Filename)
 		}
 
-		// Send email (to yourself or support)
-		err = sendMailSimpleHTML(subject, message, []string{"your_gmail_address@gmail.com"})
+		// Send email
+		err = sendMailSimpleHTML(subject, message, []string{"fergumz.70@gmail.com"})
 		if err != nil {
 			http.Error(w, "Failed to send email: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -399,96 +311,14 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Render form
-	tmpl, err := template.ParseFiles("form") // Make sure "form" is in your ./static or root folder
+	tmpl, err := template.ParseFiles("form")
 	if err != nil {
 		http.Error(w, "Error loading template", http.StatusInternalServerError)
-		logger.WithError(err).Error("Template parsing error in uploadHandler")
+		log.Println("Template parsing error:", err)
 		return
 	}
 	tmpl.Execute(w, nil)
 }
-
-// (C) The more advanced "sendSupportMessageHandler" from the second code
-//
-//	that sends an email with multiple attachments
-func sendSupportMessageHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var message SupportMessage
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		logger.WithError(err).Error("Failed to parse multipart form data")
-		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
-		return
-	}
-
-	message.UserID, _ = primitive.ObjectIDFromHex(r.FormValue("userId"))
-	message.Subject = r.FormValue("subject")
-	message.Message = r.FormValue("message")
-
-	files := r.MultipartForm.File["attachments"]
-	for _, fileHeader := range files {
-		file, err := fileHeader.Open()
-		if err != nil {
-			logger.WithError(err).Error("Failed to open attachment")
-			http.Error(w, "Failed to open attachment", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		path := fmt.Sprintf("uploads/%s", fileHeader.Filename)
-		out, err := os.Create(path)
-		if err != nil {
-			logger.WithError(err).Error("Failed to save attachment")
-			http.Error(w, "Failed to save attachment", http.StatusInternalServerError)
-			return
-		}
-		defer out.Close()
-
-		if _, err := io.Copy(out, file); err != nil {
-			logger.WithError(err).Error("Failed to copy attachment")
-			http.Error(w, "Failed to copy attachment", http.StatusInternalServerError)
-			return
-		}
-		message.FilePaths = append(message.FilePaths, path)
-	}
-
-	if err := sendEmail(message); err != nil {
-		logger.WithError(err).Error("Failed to send support message (sendEmail)")
-		http.Error(w, "Failed to send support message", http.StatusInternalServerError)
-		return
-	}
-
-	LogAction("Support Request", message.Subject, message.UserID.Hex())
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Support message sent successfully"})
-}
-
-// sendEmail is a more generic function for sending mail (from the second code)
-func sendEmail(message SupportMessage) error {
-	// Customize with your credentials
-	smtpHost := "smtp.example.com"
-	smtpPort := "587"
-	sender := "noreply@example.com"
-	password := "yourpassword"
-	recipient := "support@example.com"
-
-	subject := fmt.Sprintf("Subject: %s\r\n", message.Subject)
-	body := fmt.Sprintf("From: UserID: %s\n\n%s", message.UserID.Hex(), message.Message)
-
-	var msg bytes.Buffer
-	msg.WriteString(subject)
-	msg.WriteString(body)
-
-	auth := smtp.PlainAuth("", sender, password, smtpHost)
-	return smtp.SendMail(smtpHost+":"+smtpPort, auth, sender, []string{recipient}, msg.Bytes())
-}
-
-// ----------------------------------------------------------
-// 8. Handlers (Whales)
-// ----------------------------------------------------------
 
 func createWhaleHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -498,7 +328,6 @@ func createWhaleHandler(w http.ResponseWriter, r *http.Request) {
 
 	var whale Whale
 	if err := json.NewDecoder(r.Body).Decode(&whale); err != nil {
-		logger.WithError(err).Error("Invalid JSON data for whale creation")
 		http.Error(w, "Invalid input", http.StatusBadRequest)
 		return
 	}
@@ -512,12 +341,10 @@ func createWhaleHandler(w http.ResponseWriter, r *http.Request) {
 	_, err := collection.InsertOne(context.TODO(), whale)
 
 	if err != nil {
-		logger.WithError(err).Error("Failed to create whale record in the database")
 		http.Error(w, "Failed to create whale record", http.StatusInternalServerError)
 		return
 	}
 
-	LogAction("Create Whale", whale.Name, "System")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Whale created successfully"})
 }
@@ -531,7 +358,6 @@ func getWhalesHandler(w http.ResponseWriter, r *http.Request) {
 	collection := client.Database("example_db").Collection("whales")
 	cursor, err := collection.Find(context.TODO(), bson.M{})
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch whale records from the database")
 		http.Error(w, "Failed to fetch whale records", http.StatusInternalServerError)
 		return
 	}
@@ -539,19 +365,10 @@ func getWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 	var whales []Whale
 	if err = cursor.All(context.TODO(), &whales); err != nil {
-		logger.WithError(err).Error("Failed to parse whale records")
 		http.Error(w, "Failed to parse whale records", http.StatusInternalServerError)
 		return
 	}
 
-	// Example of an error scenario if empty:
-	if len(whales) == 0 {
-		logger.Warn("No whale records found")
-		http.Error(w, "No whale records found", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Get Whales", "Retrieved all whales", "System")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(whales)
 }
@@ -575,20 +392,12 @@ func deleteWhale(w http.ResponseWriter, r *http.Request) {
 	}
 
 	collection := client.Database("example_db").Collection("whales")
-	res, err := collection.DeleteOne(context.TODO(), bson.M{"_id": objID})
+	_, err = collection.DeleteOne(context.TODO(), bson.M{"_id": objID})
 	if err != nil {
-		logger.WithError(err).Error("Failed to delete whale from the database")
 		http.Error(w, "Failed to delete whale", http.StatusInternalServerError)
 		return
 	}
 
-	if res.DeletedCount == 0 {
-		logger.Warn("No whale found to delete")
-		http.Error(w, "No whale found to delete", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Delete Whale", fmt.Sprintf("WhaleID: %s", id), "System")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Whale deleted successfully"})
 }
@@ -607,7 +416,6 @@ func updateWhale(w http.ResponseWriter, r *http.Request) {
 
 	var whale Whale
 	if err := json.NewDecoder(r.Body).Decode(&whale); err != nil {
-		logger.WithError(err).Error("Invalid JSON data for whale update")
 		http.Error(w, "Invalid input", http.StatusBadRequest)
 		return
 	}
@@ -621,12 +429,10 @@ func updateWhale(w http.ResponseWriter, r *http.Request) {
 	collection := client.Database("example_db").Collection("whales")
 	_, err = collection.UpdateOne(context.TODO(), bson.M{"_id": objID}, bson.M{"$set": whale})
 	if err != nil {
-		logger.WithError(err).Error("Failed to update whale in the database")
 		http.Error(w, "Failed to update whale", http.StatusInternalServerError)
 		return
 	}
 
-	LogAction("Update Whale", fmt.Sprintf("WhaleID: %s", id), "System")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Whale updated successfully"})
 }
@@ -637,11 +443,13 @@ func filterWhalesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получение параметров фильтрации
 	dietType := r.URL.Query().Get("dietType")
 	size := r.URL.Query().Get("size")
 	habitat := r.URL.Query().Get("habitat")
 	population := r.URL.Query().Get("population")
 
+	// Формирование фильтра
 	filter := bson.M{}
 	if dietType != "" && dietType != "doesn't matter" {
 		filter["dietType"] = dietType
@@ -649,7 +457,7 @@ func filterWhalesHandler(w http.ResponseWriter, r *http.Request) {
 	if size != "" && size != "doesn't matter" {
 		switch size {
 		case "large":
-			filter["size"] = bson.M{"$gte": 20}
+			filter["size"] = bson.M{"$gte": 20} // Пример: больше 20 метров
 		case "middle":
 			filter["size"] = bson.M{"$gte": 10, "$lt": 20}
 		case "small":
@@ -672,10 +480,10 @@ func filterWhalesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Выполнение запроса к базе данных
 	collection := client.Database("example_db").Collection("whales")
 	cursor, err := collection.Find(context.TODO(), filter)
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch filtered whales from the database")
 		http.Error(w, "Failed to fetch filtered whales", http.StatusInternalServerError)
 		return
 	}
@@ -683,18 +491,10 @@ func filterWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 	var whales []Whale
 	if err = cursor.All(context.TODO(), &whales); err != nil {
-		logger.WithError(err).Error("Failed to parse filtered whales")
 		http.Error(w, "Failed to parse filtered whales", http.StatusInternalServerError)
 		return
 	}
 
-	if len(whales) == 0 {
-		logger.Warn("No products match the filter")
-		http.Error(w, "No products match the filter", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Filter Whales", "Applied filter", "System")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(whales)
 }
@@ -705,36 +505,36 @@ func sortWhalesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получаем параметры сортировки
 	sortBy := r.URL.Query().Get("sortBy")
 	order := r.URL.Query().Get("order")
 
-	sortOrder := 1
+	// Задаем порядок сортировки
+	sortOrder := 1 // По умолчанию - по возрастанию
 	if order == "desc" {
 		sortOrder = -1
 	}
 
+	// Разрешенные поля для сортировки
 	allowedSortFields := map[string]bool{
 		"name":            true,
 		"size":            true,
 		"populationCount": true,
 	}
 
-	if sortBy == "" {
-		sortBy = "name"
-	}
 	if !allowedSortFields[sortBy] {
-		logger.Warn("Invalid sort field")
 		http.Error(w, "Invalid sort field", http.StatusBadRequest)
 		return
 	}
 
+	// Формируем параметры сортировки
 	sort := bson.D{{Key: sortBy, Value: sortOrder}}
 
+	// Получаем отсортированные данные
 	collection := client.Database("example_db").Collection("whales")
-	opts := options.Find().SetSort(sort)
-	cursor, err := collection.Find(context.TODO(), bson.M{}, opts)
+	options := options.Find().SetSort(sort)
+	cursor, err := collection.Find(context.TODO(), bson.M{}, options)
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch sorted whales from the database")
 		http.Error(w, "Failed to fetch sorted whales", http.StatusInternalServerError)
 		return
 	}
@@ -742,18 +542,10 @@ func sortWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 	var whales []Whale
 	if err = cursor.All(context.TODO(), &whales); err != nil {
-		logger.WithError(err).Error("Failed to parse sorted whales")
 		http.Error(w, "Failed to parse sorted whales", http.StatusInternalServerError)
 		return
 	}
 
-	if len(whales) == 0 {
-		logger.Warn("No whale records found for sorting")
-		http.Error(w, "No whale records found", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Sort Whales", fmt.Sprintf("Sorting by: %s, order: %s", sortBy, order), "System")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(whales)
 }
@@ -764,11 +556,13 @@ func paginateWhalesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получаем параметры сортировки и пагинации
 	sortBy := r.URL.Query().Get("sortBy")
 	order := r.URL.Query().Get("order")
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
+	// Парсим номера страниц и лимит
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
 		page = 1
@@ -791,12 +585,12 @@ func paginateWhalesHandler(w http.ResponseWriter, r *http.Request) {
 		sort = bson.D{{Key: sortBy, Value: sortOrder}}
 	}
 
+	// Получаем данные из MongoDB с пагинацией
 	collection := client.Database("example_db").Collection("whales")
-	opts := options.Find().SetSort(sort).SetSkip(int64(skip)).SetLimit(int64(limit))
+	options := options.Find().SetSort(sort).SetSkip(int64(skip)).SetLimit(int64(limit))
 
-	cursor, err := collection.Find(context.TODO(), bson.M{}, opts)
+	cursor, err := collection.Find(context.TODO(), bson.M{}, options)
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch whales for pagination from the database")
 		http.Error(w, "Failed to fetch whales", http.StatusInternalServerError)
 		return
 	}
@@ -804,99 +598,43 @@ func paginateWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 	var whales []Whale
 	if err = cursor.All(context.TODO(), &whales); err != nil {
-		logger.WithError(err).Error("Failed to parse whales (pagination)")
 		http.Error(w, "Failed to parse whales", http.StatusInternalServerError)
 		return
 	}
 
-	if len(whales) == 0 {
-		logger.Warn("No whales found in pagination query")
-		http.Error(w, "No whales found", http.StatusNotFound)
-		return
-	}
-
-	LogAction("Paginate Whales", fmt.Sprintf("Page: %d, Limit: %d", page, limit), "System")
+	// Возвращаем результат
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(whales)
 }
 
-// ----------------------------------------------------------
-// 9. Main function with Graceful Shutdown
-// ----------------------------------------------------------
-
 func main() {
-	// 1. Configure logrus for JSON output (structured logging)
-	logger.SetFormatter(&logrus.JSONFormatter{})
-	logger.SetOutput(os.Stdout) // You can also set this to a file
-	logger.SetLevel(logrus.InfoLevel)
-
-	// 2. Connect to MongoDB
-	connectToMongoDB()
-
-	// 3. Create an HTTP server (using a custom mux)
-	mux := http.NewServeMux()
-
-	// Serve static files
-	mux.Handle("/", http.FileServer(http.Dir("./static")))
-
-	// Whale routes
-	mux.HandleFunc("/api/whales/create", wrapperHandler(createWhaleHandler))
-	mux.HandleFunc("/api/whales/list", wrapperHandler(getWhalesHandler))
-	mux.HandleFunc("/api/whales/delete", wrapperHandler(deleteWhale))
-	mux.HandleFunc("/api/whales/update", wrapperHandler(updateWhale))
-	mux.HandleFunc("/api/whales/sort", wrapperHandler(sortWhalesHandler))
-	mux.HandleFunc("/api/whales/paginate", wrapperHandler(paginateWhalesHandler))
-	mux.HandleFunc("/api/whales/filter", wrapperHandler(filterWhalesHandler))
-
-	// User routes
-	mux.HandleFunc("/createUser", wrapperHandler(createUserHandler))
-	mux.HandleFunc("/api/users/update", wrapperHandler(updateUserHandler))
-	mux.HandleFunc("/api/users/data", wrapperHandler(getUserDataHandler))
-
-	// Auth routes
-	mux.HandleFunc("/login", wrapperHandler(loginHandler))
-	mux.HandleFunc("/profile", wrapperHandler(profileHandler))
-
-	// Support routes
-	mux.HandleFunc("/api/support/send", wrapperHandler(sendSupportMessageHandler))
-
-	// The form endpoint from the first code
-	mux.HandleFunc("/form", wrapperHandler(uploadHandler))
-
-	// 4. Create the server struct
-	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+	var err error
+	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	if err != nil {
+		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
+	usersCollection = client.Database("auth_system").Collection("users")
 
-	// 5. Graceful shutdown setup
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
 
-	// Run the server in a goroutine
-	go func() {
-		logger.WithFields(logrus.Fields{
-			"action": "start_server",
-			"status": "running",
-		}).Info("Server is running on http://localhost:8080")
+	http.HandleFunc("/api/whales/create", createWhaleHandler)
+	http.HandleFunc("/api/whales/list", getWhalesHandler)
+	http.HandleFunc("/api/whales/delete", deleteWhale)
+	http.HandleFunc("/api/whales/update", updateWhale)
+	http.HandleFunc("/api/whales/sort", sortWhalesHandler)
+	http.HandleFunc("/api/whales/paginate", paginateWhalesHandler)
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("ListenAndServe(): %v", err)
-		}
-	}()
+	http.HandleFunc("/api/register", register)
+	http.HandleFunc("/api/confirm", confirmEmail)
+	http.HandleFunc("/api/login", login)
+	http.HandleFunc("/api/logout", logout)
+	http.HandleFunc("/api/protected", protected)
 
-	// Block until we receive a signal
-	<-quit
-	logger.Info("Server is shutting down...")
+	http.HandleFunc("/form", uploadHandler)
 
-	// Create a context with a 30-second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	http.HandleFunc("/api/whales/filter", filterWhalesHandler)
 
-	// Graceful shutdown
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	logger.Info("Server exiting gracefully")
+	log.Println("Server started at http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
