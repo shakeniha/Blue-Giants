@@ -20,7 +20,7 @@ The project aims to raise awareness about whales, their characteristics, and the
 - Developers looking to understand full-stack development with Golang and MongoDB.
 
 ## Team Members
-- Amir Zhunussov, Zhandarbek Zhetpissov, Ernar Aubakir
+- Amir Zhunussov
 
 ## Screenshot
 ![Blue Giants Preview](blue%20giants%20preview.png)
