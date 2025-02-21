@@ -214,11 +214,11 @@ func generateToken() string {
 }
 
 func sendConfirmationEmail(email, token string) {
-	from := "fergumz.70@gmail.com"
-	password := "cxnfodqgjvbwufsn"
+	from := "zhunusovamir54@gmail.com"
+	password := "lcjzdlhyblhwrqgd"
 	to := []string{email}
 	subject := "Confirm your registration"
-	body := fmt.Sprintf("Click the link to confirm your registration: https://blue-giants-production.up.railway.app/api/confirm?token=%s", token)
+	body := fmt.Sprintf("Click the link to confirm your registration: http://localhost:8080/api/confirm?token=%s", token)
 
 	msg := fmt.Sprintf("From: %s\nTo: %s\nSubject: %s\n\n%s", from, strings.Join(to, ","), subject, body)
 	auth := smtp.PlainAuth("", from, password, "smtp.gmail.com")
@@ -256,15 +256,15 @@ func sendMailSimpleHTML(subject, message string, to []string) error {
 
 	auth := smtp.PlainAuth(
 		"",
-		"fergumz.70@gmail.com",
-		"cxnfodqgjvbwufsn",
+		"zhunusovamir54@gmail.com",
+		"lcjzdlhyblhwrqgd",
 		"smtp.gmail.com",
 	)
 
 	return smtp.SendMail(
 		"smtp.gmail.com:587",
 		auth,
-		"fergumz.70@gmail.com",
+		"zhunusovamir54@gmail.com",
 		to,
 		[]byte(msg),
 	)
@@ -300,7 +300,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Send email
-		err = sendMailSimpleHTML(subject, message, []string{"fergumz.70@gmail.com"})
+		err = sendMailSimpleHTML(subject, message, []string{"zhunusovamir54@gmail.com"})
 		if err != nil {
 			http.Error(w, "Failed to send email: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -609,7 +609,9 @@ func paginateWhalesHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var err error
-	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://mongo:HLUsyfdQfxzgOHevYxodIwJvoeoVfhNU@junction.proxy.rlwy.net:28564"))
+	// Updated connection URI using the provided MongoDB credentials and URL.
+	uri := "mongodb://mongo:GLrpyelvoQIwKASsmrqozcoXOtpqmBUb@mongodb-jbqs.railway.internal:27017"
+	client, err = mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
@@ -635,6 +637,6 @@ func main() {
 
 	http.HandleFunc("/api/whales/filter", filterWhalesHandler)
 
-	log.Println("Server started at blue-giants-production.up.railway.app")
+	log.Println("Server started at http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
