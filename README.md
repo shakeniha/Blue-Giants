@@ -53,7 +53,7 @@ The project aims to raise awareness about whales, their characteristics, and the
    ```
 4. Run the backend server:
    ```bash
-   go run main.go
+   go run main.go utils.go
    ```
 5. Ensure the server is running on port `8080`.
 
@@ -64,11 +64,6 @@ The project aims to raise awareness about whales, their characteristics, and the
    ```
 2. Open `index.html` in your preferred web browser.
 
-### How to Use
-1. Visit the homepage (`index.html`) to access the platform.
-2. Use the form to add a whale by providing its name and description.
-3. Click the "Fetch Whales" button to view all added whales in a table format.
-4. Use Postman or curl to test backend API endpoints (`/add-whale` and `/get-whales`).
 
 ## Tools and Resources
 - **Backend:** Golang
