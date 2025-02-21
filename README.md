@@ -57,13 +57,6 @@ The project aims to raise awareness about whales, their characteristics, and the
    ```
 5. Ensure the server is running on port `8080`.
 
-#### Frontend Setup
-1. Navigate to the `frontend` folder:
-   ```bash
-   cd frontend
-   ```
-2. Open `index.html` in your preferred web browser.
-
 
 ## Tools and Resources
 - **Backend:** Golang
