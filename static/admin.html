@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Page</title>
+    <script>
+        async function checkAdmin() {
+            const res = await fetch('/api/protected', { credentials: 'include' });
+            if (res.ok) {
+                const data = await res.text();
+                if (data.includes("admin")) {
+                    document.getElementById("content").innerText = "Welcome to the Admin Page!";
+                } else {
+                    alert("You do not have access to this page.");
+                    window.location.href = '/';
+                }
+            } else {
+                alert("You need to log in to access this page.");
+                window.location.href = '/login.html';
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", checkAdmin);
+    </script>
+</head>
+<body>
+    <h1>Admin Page</h1>
+    <div id="content">Checking access...</div>
+</body>
+</html>

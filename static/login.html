@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+    <script>
+        async function login(event) {
+            event.preventDefault();
+            const username = document.getElementById("username").value;
+            const password = document.getElementById("password").value;
+
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ username, password })
+            });
+
+            if (res.ok) {
+                alert("Login successful!");
+                window.location.href = '/';
+            } else {
+                alert("Invalid credentials or email not confirmed.");
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1>Login</h1>
+    <form onsubmit="login(event)">
+        <label for="username">Username:</label><br>
+        <input type="text" id="username" required><br><br>
+        <label for="password">Password:</label><br>
+        <input type="password" id="password" required><br><br>
+        <button type="submit">Login</button>
+    </form>
+</body>
+</html>

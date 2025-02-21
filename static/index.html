@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whale Tracker</title>
+    <script>
+        async function checkLogin() {
+            const res = await fetch('/api/check-login', { credentials: 'include' });
+            const status = res.status;
+
+            if (status === 200) {
+                const data = await res.json();
+                document.getElementById("auth-status").innerHTML = `Logged in as: ${data.username} | <a href="/logout.html">Logout</a>`;
+            } else {
+                document.getElementById("auth-status").innerHTML = `<a href="/login.html">Login</a> | <a href="/register.html">Register</a>`;
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", checkLogin);
+
+        const apiBase = "/api/whales";
+
+        async function fetchWhales(sortBy = "", order = "") {
+    let url = `${apiBase}/list`;
+
+    if (sortBy && order) {
+        url = `${apiBase}/sort?sortBy=${sortBy}&order=${order}`;
+    }
+
+    const response = await fetch(url);
+    const whales = await response.json();
+    const table = document.getElementById("whaleTable");
+    table.innerHTML = "<tr><th>ID</th><th>Name</th><th>Feeding Type</th><th>Size (m)</th><th>Habitat</th><th>Population</th><th>Actions</th></tr>";
+    whales.forEach(whale => {
+        const row = table.insertRow();
+        row.innerHTML = `
+            <td>${whale.id}</td>
+            <td>${whale.name}</td>
+            <td>${whale.dietType}</td>
+            <td>${whale.size}</td>
+            <td>${whale.habitat}</td>
+            <td>${whale.populationCount}</td>
+            <td>
+                <button onclick="deleteWhale('${whale.id}')">Delete</button>
+                <button onclick="editWhale('${whale.id}', '${whale.name}', '${whale.dietType}', '${whale.size}', '${whale.habitat}', '${whale.populationCount}')">Edit</button>
+            </td>`;
+    });
+}
+
+
+        async function createWhale() {
+            const name = document.getElementById("name").value;
+            const dietType = document.getElementById("dietType").value;
+            const size = parseFloat(document.getElementById("size").value);
+            const habitat = document.getElementById("habitat").value;
+            const populationCount = parseInt(document.getElementById("populationCount").value, 10);
+
+            await fetch(`${apiBase}/create`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name, dietType, size, habitat, populationCount }),
+            });
+            fetchWhales();
+        }
+
+        async function deleteWhale(id) {
+            await fetch(`${apiBase}/delete?id=${id}`, { method: "DELETE" });
+            fetchWhales();
+        }
+
+        async function editWhale(id, name, dietType, size, habitat, populationCount) {
+            const newName = prompt("Enter new name:", name);
+            const newDietType = prompt("Enter new feeding type (Mysticeti/Odontoceti):", dietType);
+            const newSize = parseFloat(prompt("Enter new size (in meters):", size));
+            const newHabitat = prompt("Enter new habitat (Oceanic/Coastal/Polar):", habitat);
+            const newPopulationCount = parseInt(prompt("Enter new population:", populationCount), 10);
+
+            if (newName && newDietType && newSize && newHabitat && !isNaN(newPopulationCount)) {
+                await fetch(`${apiBase}/update?id=${id}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: newName, dietType: newDietType, size: newSize, habitat: newHabitat, population: newPopulationCount }),
+                });
+                fetchWhales();
+            }
+        }
+
+        window.onload = fetchWhales;
+        async function filterWhales() {
+    const dietType = document.getElementById("filterDietType").value;
+    const size = document.getElementById("filterSize").value;
+    const habitat = document.getElementById("filterHabitat").value;
+    const population = document.getElementById("filterPopulation").value;
+
+    const queryParams = new URLSearchParams({
+        dietType,
+        size,
+        habitat,
+        population,
+    });
+
+    const response = await fetch(`/api/whales/filter?${queryParams}`);
+    const whales = await response.json();
+
+    const table = document.getElementById("whaleTable");
+    table.innerHTML = "<tr><th>ID</th><th>Name</th><th>Feeding Type</th><th>Size (m)</th><th>Habitat</th><th>Population</th><th>Actions</th></tr>";
+    whales.forEach(whale => {
+        const row = table.insertRow();
+        row.innerHTML = `
+            <td>${whale.id}</td>
+            <td>${whale.name}</td>
+            <td>${whale.dietType}</td>
+            <td>${whale.size}</td>
+            <td>${whale.habitat}</td>
+            <td>${whale.populationCount}</td>
+            <td>
+                <button onclick="deleteWhale('${whale.id}')">Delete</button>
+                <button onclick="editWhale('${whale.id}', '${whale.name}', '${whale.dietType}', '${whale.size}', '${whale.habitat}', '${whale.populationCount}')">Edit</button>
+            </td>`;
+    });
+}
+
+let currentPage = 1;
+const limit = 5; // Лимит записей на странице
+
+async function fetchWhalesWithPagination(sortBy = "", order = "") {
+    const url = `${apiBase}/paginate?sortBy=${sortBy}&order=${order}&page=${currentPage}&limit=${limit}`;
+    const response = await fetch(url);
+    const whales = await response.json();
+
+    const table = document.getElementById("whaleTable");
+    table.innerHTML = "<tr><th>ID</th><th>Name</th><th>Feeding Type</th><th>Size (m)</th><th>Habitat</th><th>Population</th><th>Actions</th></tr>";
+    whales.forEach(whale => {
+        const row = table.insertRow();
+        row.innerHTML = `
+            <td>${whale.id}</td>
+            <td>${whale.name}</td>
+            <td>${whale.dietType}</td>
+            <td>${whale.size}</td>
+            <td>${whale.habitat}</td>
+            <td>${whale.populationCount}</td>
+            <td>
+                <button onclick="deleteWhale('${whale.id}')">Delete</button>
+                <button onclick="editWhale('${whale.id}', '${whale.name}', '${whale.dietType}', '${whale.size}', '${whale.habitat}', '${whale.populationCount}')">Edit</button>
+            </td>`;
+    });
+
+    updatePaginationButtons();
+}
+
+function updatePaginationButtons() {
+    document.getElementById("currentPage").innerText = `Page ${currentPage}`;
+}
+
+function nextPage() {
+    currentPage++;
+    fetchWhalesWithPagination();
+}
+
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        fetchWhalesWithPagination();
+    }
+}
+
+    </script>
+</head>
+<body>
+    <div id="auth-status">Checking login status...</div>
+    <nav>
+        <a href="/">Home</a> |
+        <a href="/protected.html">Protected Page</a> |
+        <a href="/admin.html">Admin Page</a>
+        <a href="/logout.html">Logout</a>
+    </nav>
+    <h1>Whale Tracker</h1>
+    <a href="form.html">profile</a>
+    <div>
+        <label for="filterDietType">Diet Type:</label>
+        <select id="filterDietType">
+            <option value="doesn't matter">Doesn't Matter</option>
+            <option value="Baleen">Baleen</option>
+            <option value="Toothed">Toothed</option>
+        </select>
+    
+        <label for="filterSize">Size:</label>
+        <select id="filterSize">
+            <option value="doesn't matter">Doesn't Matter</option>
+            <option value="large">Large</option>
+            <option value="middle">Middle</option>
+            <option value="small">Small</option>
+        </select>
+    
+        <label for="filterHabitat">Habitat:</label>
+        <select id="filterHabitat">
+            <option value="doesn't matter">Doesn't Matter</option>
+            <option value="Oceanic">Oceanic</option>
+            <option value="Coastal">Coastal</option>
+            <option value="Polar">Polar</option>
+        </select>
+    
+        <label for="filterPopulation">Population:</label>
+        <select id="filterPopulation">
+            <option value="doesn't matter">Doesn't Matter</option>
+            <option value="not sufficiently studied">Not Sufficiently Studied</option>
+            <option value="rare">Rare</option>
+            <option value="moderate">Moderate</option>
+            <option value="abundant">Abundant</option>
+        </select>
+    
+        <button onclick="filterWhales()">Apply Filters</button>
+    </div>
+
+    <div>
+        <button onclick="fetchWhales('name', 'asc')">Sort by Name (A-Z)</button>
+        <button onclick="fetchWhales('name', 'desc')">Sort by Name (Z-A)</button>
+        <button onclick="fetchWhales('size', 'asc')">Sort by Size (Ascending)</button>
+        <button onclick="fetchWhales('size', 'desc')">Sort by Size (Descending)</button>
+        <button onclick="fetchWhales('populationCount', 'asc')">Sort by Population (Ascending)</button>
+        <button onclick="fetchWhales('populationCount', 'desc')">Sort by Population (Descending)</button>
+    </div>
+    
+      
+
+    <h2>Add Whale</h2>
+    
+    <div>
+        <input type="text" id="name" placeholder="Whale Name">
+        <select id="dietType">
+            <option value="Baleen">Baleen</option>
+            <option value="Toothed">Toothed</option>
+        </select>
+        <input type="number" id="size" placeholder="Size (m)">
+        <select id="habitat">
+            <option value="Oceanic">Oceanic</option>
+            <option value="Coastal">Coastal</option>
+            <option value="Polar">Polar</option>
+        </select>
+        <input type="number" id="populationCount" placeholder="Population">
+        <button onclick="createWhale()">Add Whale</button>
+    </div>
+    <h2>Whale List</h2>
+    <table id="whaleTable" border="1"></table>
+
+    <div>
+        <button onclick="prevPage()">Previous</button>
+        <span id="currentPage">Page 1</span>
+        <button onclick="nextPage()">Next</button>
+    </div>
+</body>
+</html>
